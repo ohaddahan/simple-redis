@@ -7,9 +7,18 @@ use std::env;
 
 pub struct RedisAsyncClient {
     pub url: String,
-    pub client: redis::Client,
     pub connection: redis::aio::MultiplexedConnection,
     pub namespace: Namespace,
+}
+
+impl Clone for RedisAsyncClient {
+    fn clone(&self) -> Self {
+        Self {
+            url: self.url.clone(),
+            connection: self.connection.clone(),
+            namespace: self.namespace.clone(),
+        }
+    }
 }
 
 impl RedisAsyncClient {
@@ -19,7 +28,6 @@ impl RedisAsyncClient {
         let connection = client.get_multiplexed_async_connection().await?;
         Ok(Self {
             url,
-            client,
             connection,
             namespace,
         })
