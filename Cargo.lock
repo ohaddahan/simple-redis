@@ -817,7 +817,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "simple-redis"
+name = "simple-redis-wrapper"
 version = "0.1.0"
 dependencies = [
  "anyhow",
