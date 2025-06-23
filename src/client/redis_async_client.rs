@@ -24,6 +24,11 @@ impl Clone for RedisAsyncClient {
 impl RedisAsyncClient {
     pub async fn new(url: Option<String>, namespace: Namespace) -> anyhow::Result<Self> {
         let url = url.unwrap_or(env::var("REDIS_URL")?);
+        let url = if url.ends_with("#insecure") {
+            url
+        } else {
+            format!("{}#insecure", url)
+        };
         let client = redis::Client::open(url.clone())?;
         let connection = client.get_multiplexed_async_connection().await?;
         Ok(Self {

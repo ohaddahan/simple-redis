@@ -1,6 +1,6 @@
 [package]
 name = "simple-redis-wrapper"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 authors = ["ohaddahan@gmail.com"]
 license = "MIT"
@@ -13,7 +13,7 @@ serde_json = { version = "1.0.140", features = ["raw_value"] }
 serde = { version = "1.0.219", features = ["derive"] }
 anyhow = { version = "1.0.98" }
 tokio = { version = "1.45.1", features = ["full"] }
-redis = { version = "0.32.0", features = ["uuid", "tokio-comp", "tokio-rustls-comp", "connection-manager"] }
+redis = { version = "0.32.0", features = ["uuid", "tokio-comp", "tokio-rustls-comp", "connection-manager", "tls-rustls-insecure"] }
 chrono = { version = "0.4.41", features = ["clock", "serde", "wasmbind"] }
 
 [dependencies.uuid]
