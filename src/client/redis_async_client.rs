@@ -1,5 +1,6 @@
 use crate::client::types::{EvictionPolicy, Key, Namespace, Prefix};
 use anyhow::anyhow;
+use redis::aio::ConnectionManager;
 use redis::{AsyncCommands, cmd};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -7,7 +8,7 @@ use std::env;
 
 pub struct RedisAsyncClient {
     pub url: String,
-    pub connection: redis::aio::MultiplexedConnection,
+    pub connection: ConnectionManager,
     pub namespace: Namespace,
 }
 
@@ -30,7 +31,8 @@ impl RedisAsyncClient {
             format!("{}#insecure", url)
         };
         let client = redis::Client::open(url.clone())?;
-        let connection = client.get_multiplexed_async_connection().await?;
+        let connection = ConnectionManager::new(client).await?;
+        // let connection = client.get_multiplexed_async_connection().await?;
         Ok(Self {
             url,
             connection,
@@ -64,7 +66,7 @@ impl RedisAsyncClient {
         format!("{}:{}:{}", self.namespace.0, prefix.0, key.0)
     }
 
-    pub fn connection(&self) -> redis::aio::MultiplexedConnection {
+    pub fn connection(&self) -> ConnectionManager {
         self.connection.clone()
     }
 
@@ -72,7 +74,8 @@ impl RedisAsyncClient {
     where
         T: DeserializeOwned + Serialize,
     {
-        let redis_str: Option<String> = self.connection().get(self.key(prefix, key)).await?;
+        let redis_str: Option<String> =
+            AsyncCommands::get(&mut self.connection(), self.key(prefix, key)).await?;
         match redis_str {
             Some(string) => {
                 let redis_entity: T = serde_json::from_str(&string)
@@ -97,23 +100,25 @@ impl RedisAsyncClient {
             .map_err(|e| anyhow!("save_entity serde_json error: {}", e))?;
         match expiry {
             Some(expiry) => {
-                let _: () = self
-                    .connection()
-                    .set_ex(self.key(prefix, key), value_str, expiry)
-                    .await?;
+                let _: () = AsyncCommands::set_ex(
+                    &mut self.connection(),
+                    self.key(prefix, key),
+                    value_str,
+                    expiry,
+                )
+                .await?;
             }
             None => {
-                let _: () = self
-                    .connection()
-                    .set(self.key(prefix, key), value_str)
-                    .await?;
+                let _: () =
+                    AsyncCommands::set(&mut self.connection(), self.key(prefix, key), value_str)
+                        .await?;
             }
         }
         Ok(())
     }
 
     pub async fn remove_entity(&self, prefix: &Prefix, key: &Key) -> anyhow::Result<()> {
-        let _: () = self.connection().del(self.key(prefix, key)).await?;
+        let _: () = AsyncCommands::del(&mut self.connection(), self.key(prefix, key)).await?;
         Ok(())
     }
 }
