@@ -70,6 +70,29 @@ impl RedisAsyncClient {
         self.connection.clone()
     }
 
+    pub async fn get(&self, key: &str) -> anyhow::Result<Option<String>> {
+        let redis_str: Option<String> = AsyncCommands::get(&mut self.connection(), key).await?;
+        Ok(redis_str)
+    }
+
+    pub async fn set_ex(&self, key: &str, value: &str, expiry: Option<u64>) -> anyhow::Result<()> {
+        match expiry {
+            Some(expiry) => {
+                let _: () =
+                    AsyncCommands::set_ex(&mut self.connection(), key, value, expiry).await?;
+            }
+            None => {
+                let _: () = AsyncCommands::set(&mut self.connection(), key, value).await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn remove(&self, key: &str) -> anyhow::Result<()> {
+        let _: () = AsyncCommands::del(&mut self.connection(), key).await?;
+        Ok(())
+    }
+
     pub async fn get_entity<T>(&self, prefix: &Prefix, key: &Key) -> anyhow::Result<T>
     where
         T: DeserializeOwned + Serialize,
