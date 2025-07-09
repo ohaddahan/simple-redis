@@ -88,12 +88,12 @@ impl RedisAsyncClient {
         Ok(())
     }
 
-    pub async fn get_all(&self) -> anyhow::Result<Vec<String>> {
-        let mut output: Vec<String> = Vec::new();
+    pub async fn get_all(&self) -> anyhow::Result<Vec<(String, String)>> {
+        let mut output: Vec<(String, String)> = Vec::new();
         let keys: Vec<String> = AsyncCommands::keys(&mut self.connection(), "*").await?;
         for key in keys {
             match self.get(&key).await? {
-                Some(value) => output.push(value),
+                Some(value) => output.push((key, value)),
                 None => {}
             }
         }
