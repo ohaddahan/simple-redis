@@ -92,9 +92,8 @@ impl RedisAsyncClient {
         let mut output: Vec<(String, String)> = Vec::new();
         let keys: Vec<String> = AsyncCommands::keys(&mut self.connection(), "*").await?;
         for key in keys {
-            match self.get(&key).await? {
-                Some(value) => output.push((key, value)),
-                None => {}
+            if let Some(value) = self.get(&key).await? {
+                output.push((key, value))
             }
         }
         Ok(output)
@@ -152,7 +151,7 @@ impl RedisAsyncClient {
         Ok(())
     }
 
-    pub async fn remove_entity(&self, prefix: &Prefix, key: &Key) -> anyhow::Result<()> {
+    pub async fn remove_entity<T>(&self, prefix: &Prefix, key: &Key) -> anyhow::Result<()> {
         let _: () = AsyncCommands::del(&mut self.connection(), self.key(prefix, key)).await?;
         Ok(())
     }
