@@ -53,4 +53,27 @@ mod tests {
         assert_eq!(entity.id, from_redis.id);
         assert_eq!(entity.date, from_redis.date);
     }
+
+    #[tokio::test]
+    async fn scan_test() {
+        #[derive(Serialize, Deserialize, Debug)]
+        struct TestEntity {
+            pub date: DateTime<Utc>,
+            pub id: Uuid,
+        }
+        let entity = TestEntity {
+            date: Utc::now(),
+            id: Uuid::new_v4(),
+        };
+        let prefix = Prefix("TestEntity".to_string());
+        let key = Key(entity.id.to_string());
+        let client = RedisAsyncClient::new(None, Namespace("Test".to_string()))
+            .await
+            .unwrap();
+        client
+            .save_entity(&prefix, &key, &entity, None)
+            .await
+            .unwrap();
+        let _scan_results = client.scan::<TestEntity>("Test*", 4).await.unwrap();
+    }
 }

@@ -1,7 +1,8 @@
 use crate::client::types::{EvictionPolicy, Key, Namespace, Prefix};
 use anyhow::anyhow;
+use futures::stream::StreamExt;
 use redis::aio::ConnectionManager;
-use redis::{AsyncCommands, cmd};
+use redis::{AsyncCommands, AsyncIter, ScanOptions, cmd};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::env;
@@ -154,5 +155,28 @@ impl RedisAsyncClient {
     pub async fn remove_entity<T>(&self, prefix: &Prefix, key: &Key) -> anyhow::Result<()> {
         let _: () = AsyncCommands::del(&mut self.connection(), self.key(prefix, key)).await?;
         Ok(())
+    }
+
+    pub async fn scan<T>(&self, pattern: &str, chunk_size: usize) -> anyhow::Result<Vec<T>>
+    where
+        T: DeserializeOwned + Serialize,
+    {
+        let opts = ScanOptions::default().with_pattern(pattern);
+        let mut con = self.connection();
+        let iter: AsyncIter<Option<String>> = AsyncCommands::scan_options(&mut con, opts).await?;
+        let keys: Vec<Option<String>> = iter.map(Result::unwrap_or_default).collect().await;
+        let keys: Vec<String> = keys.into_iter().filter_map(|i| i).collect();
+        let mut output: Vec<T> = Vec::with_capacity(keys.len());
+        for chunk in keys.chunks(chunk_size) {
+            let values: Vec<Option<String>> = AsyncCommands::mget(&mut con, chunk).await?;
+            let values: Vec<String> = values.into_iter().filter_map(|i| i).collect();
+            for value in values {
+                match serde_json::from_str::<T>(&value) {
+                    Ok(v) => output.push(v),
+                    Err(_) => {}
+                }
+            }
+        }
+        Ok(output)
     }
 }
