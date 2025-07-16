@@ -1,3 +1,4 @@
+use crate::client::common::RedisAsyncClientTrait;
 use crate::client::types::{EvictionPolicy, Key, Namespace, Prefix};
 use anyhow::anyhow;
 use futures::stream::StreamExt;
@@ -24,7 +25,13 @@ impl Clone for RedisAsyncClient {
 }
 
 impl RedisAsyncClient {
-    pub async fn new(url: Option<String>, namespace: Namespace) -> anyhow::Result<Self> {
+    fn connection(&self) -> ConnectionManager {
+        self.connection.clone()
+    }
+}
+
+impl RedisAsyncClientTrait<RedisAsyncClient> for RedisAsyncClient {
+    async fn new(url: Option<String>, namespace: Namespace) -> anyhow::Result<Self> {
         let url = url.unwrap_or(env::var("REDIS_URL")?);
         let url = if url.ends_with("#insecure") {
             url
@@ -41,10 +48,7 @@ impl RedisAsyncClient {
         })
     }
 
-    pub async fn set_eviction_policy(
-        &self,
-        eviction_policy: EvictionPolicy,
-    ) -> anyhow::Result<String> {
+    async fn set_eviction_policy(&self, eviction_policy: EvictionPolicy) -> anyhow::Result<String> {
         let _: () = cmd("CONFIG")
             .arg("SET")
             .arg("maxmemory-policy")
@@ -54,7 +58,7 @@ impl RedisAsyncClient {
         self.get_eviction_policy().await
     }
 
-    pub async fn get_eviction_policy(&self) -> anyhow::Result<String> {
+    async fn get_eviction_policy(&self) -> anyhow::Result<String> {
         let current_policy: Vec<String> = cmd("CONFIG")
             .arg("GET")
             .arg("maxmemory-policy")
@@ -63,20 +67,16 @@ impl RedisAsyncClient {
         Ok(current_policy.join(""))
     }
 
-    pub fn key(&self, prefix: &Prefix, key: &Key) -> String {
+    fn key(&self, prefix: &Prefix, key: &Key) -> String {
         format!("{}:{}:{}", self.namespace.0, prefix.0, key.0)
     }
 
-    pub fn connection(&self) -> ConnectionManager {
-        self.connection.clone()
-    }
-
-    pub async fn get(&self, key: &str) -> anyhow::Result<Option<String>> {
+    async fn get(&self, key: &str) -> anyhow::Result<Option<String>> {
         let redis_str: Option<String> = AsyncCommands::get(&mut self.connection(), key).await?;
         Ok(redis_str)
     }
 
-    pub async fn set_ex(&self, key: &str, value: &str, expiry: Option<u64>) -> anyhow::Result<()> {
+    async fn set_ex(&self, key: &str, value: &str, expiry: Option<u64>) -> anyhow::Result<()> {
         match expiry {
             Some(expiry) => {
                 let _: () =
@@ -89,7 +89,7 @@ impl RedisAsyncClient {
         Ok(())
     }
 
-    pub async fn get_all(&self) -> anyhow::Result<Vec<(String, String)>> {
+    async fn get_all(&self) -> anyhow::Result<Vec<(String, String)>> {
         let mut output: Vec<(String, String)> = Vec::new();
         let keys: Vec<String> = AsyncCommands::keys(&mut self.connection(), "*").await?;
         for key in keys {
@@ -100,12 +100,12 @@ impl RedisAsyncClient {
         Ok(output)
     }
 
-    pub async fn remove(&self, key: &str) -> anyhow::Result<()> {
+    async fn remove(&self, key: &str) -> anyhow::Result<()> {
         let _: () = AsyncCommands::del(&mut self.connection(), key).await?;
         Ok(())
     }
 
-    pub async fn get_entity<T>(&self, prefix: &Prefix, key: &Key) -> anyhow::Result<T>
+    async fn get_entity<T>(&self, prefix: &Prefix, key: &Key) -> anyhow::Result<T>
     where
         T: DeserializeOwned + Serialize,
     {
@@ -121,7 +121,7 @@ impl RedisAsyncClient {
         }
     }
 
-    pub async fn save_entity<T>(
+    async fn save_entity<T>(
         &self,
         prefix: &Prefix,
         key: &Key,
@@ -152,12 +152,12 @@ impl RedisAsyncClient {
         Ok(())
     }
 
-    pub async fn remove_entity<T>(&self, prefix: &Prefix, key: &Key) -> anyhow::Result<()> {
+    async fn remove_entity<T>(&self, prefix: &Prefix, key: &Key) -> anyhow::Result<()> {
         let _: () = AsyncCommands::del(&mut self.connection(), self.key(prefix, key)).await?;
         Ok(())
     }
 
-    pub async fn scan<T>(&self, pattern: &str, chunk_size: usize) -> anyhow::Result<Vec<T>>
+    async fn scan<T>(&self, pattern: &str, chunk_size: usize) -> anyhow::Result<Vec<T>>
     where
         T: DeserializeOwned + Serialize,
     {
@@ -178,5 +178,82 @@ impl RedisAsyncClient {
             }
         }
         Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::client::common::RedisAsyncClientTrait;
+    use crate::client::redis_rs_async_client::RedisAsyncClient;
+    use crate::client::types::{EvictionPolicy, Key, Namespace, Prefix};
+    use chrono::{DateTime, Utc};
+    use serde::{Deserialize, Serialize};
+    use uuid::Uuid;
+    #[tokio::test]
+    async fn init_client() {
+        let client = RedisAsyncClient::new(None, Namespace("Test".to_string()))
+            .await
+            .unwrap();
+        let eviction_policy = client.get_eviction_policy().await.unwrap();
+        assert_eq!(eviction_policy, "maxmemory-policynoeviction");
+        println!("eviction_policy => {}", eviction_policy);
+        let eviction_policy = client
+            .set_eviction_policy(EvictionPolicy::AllKeysLFU)
+            .await
+            .unwrap();
+        assert_eq!(eviction_policy, "maxmemory-policyallkeys-lfu");
+    }
+
+    #[tokio::test]
+    async fn entity_test() {
+        #[derive(Serialize, Deserialize)]
+        struct TestEntity {
+            pub date: DateTime<Utc>,
+            pub id: Uuid,
+        }
+
+        let entity = TestEntity {
+            date: Utc::now(),
+            id: Uuid::new_v4(),
+        };
+        let prefix = Prefix("TestEntity".to_string());
+        let key = Key(entity.id.to_string());
+        let client = RedisAsyncClient::new(None, Namespace("Test".to_string()))
+            .await
+            .unwrap();
+        client
+            .save_entity(&prefix, &key, &entity, None)
+            .await
+            .unwrap();
+
+        let from_redis = client
+            .get_entity::<TestEntity>(&prefix, &key)
+            .await
+            .unwrap();
+        assert_eq!(entity.id, from_redis.id);
+        assert_eq!(entity.date, from_redis.date);
+    }
+
+    #[tokio::test]
+    async fn scan_test() {
+        #[derive(Serialize, Deserialize, Debug)]
+        struct TestEntity {
+            pub date: DateTime<Utc>,
+            pub id: Uuid,
+        }
+        let entity = TestEntity {
+            date: Utc::now(),
+            id: Uuid::new_v4(),
+        };
+        let prefix = Prefix("TestEntity".to_string());
+        let key = Key(entity.id.to_string());
+        let client = RedisAsyncClient::new(None, Namespace("Test".to_string()))
+            .await
+            .unwrap();
+        client
+            .save_entity(&prefix, &key, &entity, None)
+            .await
+            .unwrap();
+        let _scan_results = client.scan::<TestEntity>("Test*", 4).await.unwrap();
     }
 }
