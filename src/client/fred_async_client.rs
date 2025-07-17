@@ -95,8 +95,8 @@ impl RedisAsyncClientTrait<FredAsyncClient> for FredAsyncClient {
         todo!()
     }
 
-    async fn remove(&self, key: &str) -> anyhow::Result<()> {
-        let _: () = self.connection.del(key).await?;
+    async fn remove(&self, keys: Vec<String>) -> anyhow::Result<()> {
+        let _: () = self.connection.del(keys).await?;
         Ok(())
     }
 
@@ -194,6 +194,15 @@ mod tests {
             .unwrap();
         assert_eq!(entity.id, from_redis.id);
         assert_eq!(entity.date, from_redis.date);
+        let _ = client
+            .remove_entity::<TestEntity>(&prefix, &key)
+            .await
+            .unwrap();
+        let from_redis = client
+            .get_entity::<TestEntity>(&prefix, &key)
+            .await
+            .unwrap();
+        assert!(from_redis.is_none());
     }
 
     #[tokio::test]

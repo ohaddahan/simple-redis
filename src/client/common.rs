@@ -13,7 +13,7 @@ pub trait RedisAsyncClientTrait<TSelf> {
     async fn get(&self, key: &str) -> anyhow::Result<Option<String>>;
     async fn set_ex(&self, key: &str, value: &str, expiry: Option<u64>) -> anyhow::Result<()>;
     async fn get_all(&self) -> anyhow::Result<Vec<(String, String)>>;
-    async fn remove(&self, key: &str) -> anyhow::Result<()>;
+    async fn remove(&self, key: Vec<String>) -> anyhow::Result<()>;
     async fn get_entity<T>(&self, prefix: &Prefix, key: &Key) -> anyhow::Result<Option<T>>
     where
         T: DeserializeOwned + Serialize,
@@ -41,7 +41,7 @@ pub trait RedisAsyncClientTrait<TSelf> {
         Ok(())
     }
     async fn remove_entity<T>(&self, prefix: &Prefix, key: &Key) -> anyhow::Result<()> {
-        self.remove(&self.key(prefix, key)).await?;
+        self.remove(vec![self.key(prefix, key)]).await?;
         Ok(())
     }
     async fn scan<T>(
