@@ -1,6 +1,5 @@
 use crate::client::common::RedisAsyncClientTrait;
 use crate::client::types::{EvictionPolicy, Key, Namespace, Prefix};
-use anyhow::anyhow;
 use futures::stream::StreamExt;
 use redis::aio::ConnectionManager;
 use redis::{AsyncCommands, AsyncIter, ScanOptions, cmd};
@@ -8,13 +7,13 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::env;
 
-pub struct RedisAsyncClient {
+pub struct RedisRsAsyncClient {
     pub url: String,
     pub connection: ConnectionManager,
     pub namespace: Namespace,
 }
 
-impl Clone for RedisAsyncClient {
+impl Clone for RedisRsAsyncClient {
     fn clone(&self) -> Self {
         Self {
             url: self.url.clone(),
@@ -24,13 +23,13 @@ impl Clone for RedisAsyncClient {
     }
 }
 
-impl RedisAsyncClient {
+impl RedisRsAsyncClient {
     fn connection(&self) -> ConnectionManager {
         self.connection.clone()
     }
 }
 
-impl RedisAsyncClientTrait<RedisAsyncClient> for RedisAsyncClient {
+impl RedisAsyncClientTrait<RedisRsAsyncClient> for RedisRsAsyncClient {
     async fn new(url: Option<String>, namespace: Namespace) -> anyhow::Result<Self> {
         let url = url.unwrap_or(env::var("REDIS_URL")?);
         let url = if url.ends_with("#insecure") {
@@ -105,76 +104,36 @@ impl RedisAsyncClientTrait<RedisAsyncClient> for RedisAsyncClient {
         Ok(())
     }
 
-    async fn get_entity<T>(&self, prefix: &Prefix, key: &Key) -> anyhow::Result<T>
-    where
-        T: DeserializeOwned + Serialize,
-    {
-        let redis_str: Option<String> =
-            AsyncCommands::get(&mut self.connection(), self.key(prefix, key)).await?;
-        match redis_str {
-            Some(string) => {
-                let redis_entity: T = serde_json::from_str(&string)
-                    .map_err(|e| anyhow!("get_entity serde_json error: {}", e))?;
-                Ok(redis_entity)
-            }
-            None => Err(anyhow!("Didn't find entity")),
-        }
-    }
-
-    async fn save_entity<T>(
+    async fn scan<T>(
         &self,
-        prefix: &Prefix,
-        key: &Key,
-        value: &T,
-        expiry: Option<u64>,
-    ) -> anyhow::Result<()>
+        pattern: &str,
+        chunk_size: Option<usize>,
+        limit: Option<usize>,
+    ) -> anyhow::Result<Vec<T>>
     where
         T: DeserializeOwned + Serialize,
     {
-        let value_str = serde_json::to_string(&value)
-            .map_err(|e| anyhow!("save_entity serde_json error: {}", e))?;
-        match expiry {
-            Some(expiry) => {
-                let _: () = AsyncCommands::set_ex(
-                    &mut self.connection(),
-                    self.key(prefix, key),
-                    value_str,
-                    expiry,
-                )
-                .await?;
-            }
-            None => {
-                let _: () =
-                    AsyncCommands::set(&mut self.connection(), self.key(prefix, key), value_str)
-                        .await?;
-            }
-        }
-        Ok(())
-    }
-
-    async fn remove_entity<T>(&self, prefix: &Prefix, key: &Key) -> anyhow::Result<()> {
-        let _: () = AsyncCommands::del(&mut self.connection(), self.key(prefix, key)).await?;
-        Ok(())
-    }
-
-    async fn scan<T>(&self, pattern: &str, chunk_size: usize) -> anyhow::Result<Vec<T>>
-    where
-        T: DeserializeOwned + Serialize,
-    {
+        let chunk_size = chunk_size.unwrap_or(100);
+        let limit = limit.unwrap_or(1_000);
         let opts = ScanOptions::default().with_pattern(pattern);
         let mut con = self.connection();
         let iter: AsyncIter<Option<String>> = AsyncCommands::scan_options(&mut con, opts).await?;
         let keys: Vec<Option<String>> = iter.map(Result::unwrap_or_default).collect().await;
         let keys: Vec<String> = keys.into_iter().filter_map(|i| i).collect();
         let mut output: Vec<T> = Vec::with_capacity(keys.len());
+        let mut count = 0;
         for chunk in keys.chunks(chunk_size) {
             let values: Vec<Option<String>> = AsyncCommands::mget(&mut con, chunk).await?;
             let values: Vec<String> = values.into_iter().filter_map(|i| i).collect();
+            count += values.len();
             for value in values {
                 match serde_json::from_str::<T>(&value) {
                     Ok(v) => output.push(v),
                     Err(_) => {}
                 }
+            }
+            if count >= limit {
+                break;
             }
         }
         Ok(output)
@@ -184,19 +143,18 @@ impl RedisAsyncClientTrait<RedisAsyncClient> for RedisAsyncClient {
 #[cfg(test)]
 mod tests {
     use crate::client::common::RedisAsyncClientTrait;
-    use crate::client::redis_rs_async_client::RedisAsyncClient;
+    use crate::client::redis_rs_async_client::RedisRsAsyncClient;
     use crate::client::types::{EvictionPolicy, Key, Namespace, Prefix};
     use chrono::{DateTime, Utc};
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
     #[tokio::test]
     async fn init_client() {
-        let client = RedisAsyncClient::new(None, Namespace("Test".to_string()))
+        let client = RedisRsAsyncClient::new(None, Namespace("Test".to_string()))
             .await
             .unwrap();
         let eviction_policy = client.get_eviction_policy().await.unwrap();
         assert_eq!(eviction_policy, "maxmemory-policynoeviction");
-        println!("eviction_policy => {}", eviction_policy);
         let eviction_policy = client
             .set_eviction_policy(EvictionPolicy::AllKeysLFU)
             .await
@@ -218,17 +176,18 @@ mod tests {
         };
         let prefix = Prefix("TestEntity".to_string());
         let key = Key(entity.id.to_string());
-        let client = RedisAsyncClient::new(None, Namespace("Test".to_string()))
+        let client = RedisRsAsyncClient::new(None, Namespace("Test".to_string()))
             .await
             .unwrap();
         client
-            .save_entity(&prefix, &key, &entity, None)
+            .save_entity(&prefix, &key, &entity, Some(10))
             .await
             .unwrap();
 
         let from_redis = client
             .get_entity::<TestEntity>(&prefix, &key)
             .await
+            .unwrap()
             .unwrap();
         assert_eq!(entity.id, from_redis.id);
         assert_eq!(entity.date, from_redis.date);
@@ -247,13 +206,16 @@ mod tests {
         };
         let prefix = Prefix("TestEntity".to_string());
         let key = Key(entity.id.to_string());
-        let client = RedisAsyncClient::new(None, Namespace("Test".to_string()))
+        let client = RedisRsAsyncClient::new(None, Namespace("Test".to_string()))
             .await
             .unwrap();
         client
-            .save_entity(&prefix, &key, &entity, None)
+            .save_entity(&prefix, &key, &entity, Some(10))
             .await
             .unwrap();
-        let _scan_results = client.scan::<TestEntity>("Test*", 4).await.unwrap();
+        let _scan_results = client
+            .scan::<TestEntity>("Test*", Some(4), None)
+            .await
+            .unwrap();
     }
 }
